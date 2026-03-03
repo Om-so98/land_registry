@@ -97,11 +97,11 @@ module land_registry::land_registry {
         request_id: ID,
         land_id: ID,
         returned_to: address,
-
+    }
     fun init(ctx: &mut TxContext) {
         let admin_cap = AdminCap {
             id: object::new(ctx),
-        };
+        };  
         transfer::transfer(admin_cap, tx_context::sender(ctx));
     }
 

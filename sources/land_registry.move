@@ -8,7 +8,6 @@ module land_registry::land_registry {
     use std::option::{Self, Option};
 
 
-
     const SIX_MONTHS_MS: u64 = 15_552_000_000;
 
     const STATUS_PENDING: u8   = 0;
@@ -24,7 +23,13 @@ module land_registry::land_registry {
     const EWrongPlot: u64             = 6;
     const ENotDisputed: u64           = 7;
     const EComplaintWindowClosed: u64 = 8;
+    const EBadgeIssuedAfterTransfer: u64 = 9;
+    const EActiveBadgeExist: u64 = 10;
 
+    const CLAIM_NEIGHBOR: u8 = 0;
+    const CLAIM_HEIR: u8 = 1;
+    const CLAIM_LIEN_HOLDER: u8 = 2;
+    const CLAIM_GOVERNMENT: u8 = 3;
 
     public struct AdminCap has key, store {
         id: UID,
@@ -36,6 +41,7 @@ module land_registry::land_registry {
         location: String,
         gps_coords: String,
         size_sqm: u64,
+        has_active_badge: bool,
         is_locked: bool,
     }
 
@@ -55,24 +61,27 @@ module land_registry::land_registry {
         id: UID,
         owner: address,
         issued_by: address,
+        issued_at: u64,
+        claim_type: u8,
         plot_id: String,
     }
 
     
 
-    public struct LandMinted has copy, drop {
+    public struct LandMinted has , drop {
         land_id: ID,
         plot_id: String,
         recipient: address,
     }
 
-    public struct ClaimantVerified has copy, drop {
+
+    public struct ClaimantVerified has  drop {
         badge_id: ID,
         recipient: address,
         plot_id: String,
     }
 
-    public struct TransferInitiated has copy, drop {
+    public struct TransferInitiated has , drop {
         request_id: ID,
         land_id: ID,
         from: address,
@@ -80,20 +89,21 @@ module land_registry::land_registry {
         initiated_at: u64,
     }
 
-    public struct ComplaintFiled has copy, drop {
+    public struct ComplaintFiled has , drop {
         request_id: ID,
         complainant: address,
         complaint_text: String,
+        claim_type: u8,
     }
 
-    public struct TransferCompleted has copy, drop {
+    public struct TransferCompleted has , drop {
         request_id: ID,
         land_id: ID,
         from: address,
         to: address,
     }
 
-    public struct TransferCancelled has copy, drop {
+    public struct TransferCancelled has , drop {
         request_id: ID,
         land_id: ID,
         returned_to: address,
@@ -132,6 +142,20 @@ module land_registry::land_registry {
         transfer::transfer(land, recipient);
     }
 
+    public fun admin_clear_badge(
+        _cap: &AdminCap,
+        land: &mut LandNFT,
+        ctx: &mut TxContext,
+    ) {
+        land.has_active_badge = false;
+
+        event::emit(BadgeCleared {
+            land_id: object::id(land),
+            plot_id: land.plot_id,
+            cleared_by: tx_context::sender(ctx),
+        });
+    }
+
     public fun mint_admin_cap(
         _cap: &AdminCap,
         recipient: address,
@@ -146,8 +170,14 @@ module land_registry::land_registry {
     public fun issue_claimant_badge(
         _cap: &AdminCap,
         recipient: address,
+        clock: &Clock,
+        claim_type: u8,
+        land: &mut LandNFT,
         plot_id: vector<u8>,
         ctx: &mut TxContext
+        issued_at: clock::timestamp_ms(clock),
+        claim_type: u8,
+        land.has_active_badge = true;
     ) {
         let badge = ClaimantBadge {
             id: object::new(ctx),
@@ -174,6 +204,7 @@ module land_registry::land_registry {
         ctx: &mut TxContext
     ) {
         assert!(!land.is_locked, ELandLocked);
+        assert!(!land.has_active_badge, EActiveBadgeExist);
 
         let from = tx_context::sender(ctx);
         let now = clock::timestamp_ms(clock);
@@ -211,10 +242,12 @@ module land_registry::land_registry {
         badge: &ClaimantBadge,
         complaint_text: vector<u8>,
         clock: &Clock,
+        badge: ClaimantBadge,
         ctx: &mut TxContext
     ) {
         assert!(request.status == STATUS_PENDING, ENotPending);
         assert!(badge.plot_id == request.land.plot_id, EWrongPlot);
+        assert!(badge.issued_at < request.initiated_at, EBadgeIssuedAfterTransfer);
 
         let now = clock::timestamp_ms(clock);
         assert!(
@@ -232,6 +265,7 @@ module land_registry::land_registry {
             request_id: object::id(request),
             complainant: tx_context::sender(ctx),
             complaint_text: text,
+            claim_type,
         });
     }
 
